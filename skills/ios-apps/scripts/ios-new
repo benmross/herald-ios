@@ -1,0 +1,21 @@
+#!/bin/bash
+# ios-new <Name> [bundle-id]: stamp a buildable iPhone-only SwiftUI project into <herald>/projects/<name>-ios.
+# Hand-written .xcodeproj on purpose (see SKILL.md: XcodeGen overwrites Info.plist and entitlements).
+# The default bundle id is ios.bundle_prefix plus the lowercased name.
+set -euo pipefail
+PREFIX=$(herald config get ios.bundle_prefix 2>/dev/null | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v or "")')
+NAME=$1
+if [ -n "${2:-}" ]; then BID=$2
+elif [ -n "$PREFIX" ]; then BID=$PREFIX.$(echo "$NAME" | tr 'A-Z' 'a-z')
+else echo "give a bundle id, or set ios.bundle_prefix (e.g. com.yourname)" >&2; exit 2; fi
+TEAM=$(herald config get ios.team_id 2>/dev/null | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v or "")')
+[ -n "$TEAM" ] || { echo "set ios.team_id (your Apple developer Team ID)" >&2; exit 2; }
+T=$(dirname "$(readlink -f "$0")")/../template
+DEST=${HERALD_ROOT:-$HOME/herald}/projects/$(echo "$NAME" | tr 'A-Z' 'a-z')-ios
+[ -e "$DEST" ] && { echo "$DEST exists" >&2; exit 1; }
+mkdir -p "$DEST/Sources" "$DEST/$NAME.xcodeproj"
+sed -e "s/__NAME__/$NAME/g" -e "s/__BID__/$BID/g" -e "s/__TEAM__/$TEAM/g" "$T/project.pbxproj" > "$DEST/$NAME.xcodeproj/project.pbxproj"
+sed -e "s/__NAME__/$NAME/g" "$T/Sources/__NAME__App.swift" > "$DEST/Sources/${NAME}App.swift"
+printf '.build/\nbuild/\nxcuserdata/\n.DS_Store\n' > "$DEST/.gitignore"
+git -C "$DEST" init -q && git -C "$DEST" add -A && git -C "$DEST" commit -qm "Scaffold $NAME"
+echo "$DEST"

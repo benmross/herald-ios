@@ -1,0 +1,50 @@
+#!/bin/bash
+# ios-run <project-dir> [scheme]: build on the build Mac, sign, publish an over-the-air install link.
+# Prints the tap-to-install URL. Settings: ios.build_host, ios.fallback_host, ios.team_id,
+# ios.ota_url, ios.ota_dir (herald config set ...). IOS_BUILD_HOST overrides the host.
+set -euo pipefail
+setting() { herald config get "$1" 2>/dev/null | python3 -c 'import json,sys; v=json.load(sys.stdin); print("" if v is None else v)'; }
+HOST=${IOS_BUILD_HOST:-$(setting ios.build_host)}
+FALLBACK=$(setting ios.fallback_host)
+TEAM=$(setting ios.team_id)
+BASE=$(setting ios.ota_url)
+OTA=$(setting ios.ota_dir); OTA=${OTA:-$HOME/ota}; OTA=${OTA/#\~/$HOME}
+[ -n "$HOST" ] || { echo "set ios.build_host (user@address of the Mac that builds)" >&2; exit 2; }
+[ -n "$TEAM" ] || { echo "set ios.team_id (your Apple developer Team ID)" >&2; exit 2; }
+[ -n "$BASE" ] || { echo "set ios.ota_url (the https address that serves ios.ota_dir)" >&2; exit 2; }
+if [ -z "${IOS_BUILD_HOST:-}" ] && [ -n "$FALLBACK" ] && ! ssh -o ConnectTimeout=6 -o BatchMode=yes "$HOST" true 2>/dev/null; then
+  echo "$HOST unreachable, using $FALLBACK" >&2; HOST=$FALLBACK
+fi
+SRC=$(cd "$1" && pwd); NAME=${2:-$(basename "$SRC")}
+SECRETS=${HERALD_HOME:-$HOME/.herald}/secrets.json
+ISS=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['appstore']['issuer_id'])" "$SECRETS")
+KID=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['appstore']['key_id'])" "$SECRETS")
+S=$(date +%s)
+rsync -az --delete --exclude .git --exclude build "$SRC"/ "$HOST:Developer/$NAME/"
+PROJ=$(ssh "$HOST" "find ~/Developer/$NAME -maxdepth 2 -name '*.xcodeproj' | head -1")
+ssh "$HOST" bash -s "$PROJ" "$NAME" "$ISS" "$KID" "$TEAM" <<'REMOTE'
+set -e
+PROJ=$1; NAME=$2; ISS=$3; KID=$4; TEAM=$5
+security unlock-keychain -p "$(cat $HOME/.config/build-keychain-pw)" $HOME/Library/Keychains/build.keychain-db
+A="-allowProvisioningUpdates -authenticationKeyPath $HOME/private_keys/AuthKey_$KID.p8 -authenticationKeyID $KID -authenticationKeyIssuerID $ISS"
+rm -rf /tmp/$NAME.xcarchive /tmp/$NAME-out
+cat > /tmp/ios-run-exp.plist <<P
+<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>method</key><string>debugging</string><key>teamID</key><string>$TEAM</string><key>signingStyle</key><string>automatic</string></dict></plist>
+P
+xcodebuild -project "$PROJ" -scheme "$NAME" -configuration Debug -destination generic/platform=iOS -archivePath /tmp/$NAME.xcarchive $A archive > /tmp/$NAME-build.log 2>&1 || { grep -E "error:" /tmp/$NAME-build.log | head -20; exit 1; }
+xcodebuild -exportArchive -archivePath /tmp/$NAME.xcarchive -exportPath /tmp/$NAME-out -exportOptionsPlist /tmp/ios-run-exp.plist $A > /tmp/$NAME-export.log 2>&1 || { tail -20 /tmp/$NAME-export.log; exit 1; }
+APP=$(ls -d /tmp/$NAME.xcarchive/Products/Applications/*.app)
+/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$APP/Info.plist" > /tmp/$NAME-out/bid
+/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Info.plist" > /tmp/$NAME-out/ver
+REMOTE
+mkdir -p "$OTA"
+ssh "$HOST" "cat /tmp/$NAME-out/*.ipa" > "$OTA/$NAME.ipa"
+BID=$(ssh "$HOST" "cat /tmp/$NAME-out/bid"); VER=$(ssh "$HOST" "cat /tmp/$NAME-out/ver")
+STAMP=$(date +%s)
+cat > "$OTA/$NAME.plist" <<P
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>items</key><array><dict><key>assets</key><array><dict><key>kind</key><string>software-package</string><key>url</key><string>$BASE/$NAME.ipa</string></dict></array><key>metadata</key><dict><key>bundle-identifier</key><string>$BID</string><key>bundle-version</key><string>$VER</string><key>kind</key><string>software</string><key>title</key><string>$NAME</string></dict></dict></array></dict></plist>
+P
+{ echo '<!doctype html><meta name=viewport content="width=device-width"><body style="font:32px sans-serif">'
+  for p in "$OTA"/*.plist; do n=$(basename "$p" .plist); echo "<p><a href=\"itms-services://?action=download-manifest&amp;url=$BASE/$n.plist\">Install $n</a></p>"; done; } > "$OTA/index.html"
+echo "$NAME built in $(( $(date +%s) - S ))s"
+echo "$BASE/"

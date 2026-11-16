@@ -1,0 +1,59 @@
+{
+  "name": "ios",
+  "description": "Build, test, sign and ship native iOS apps from a machine without Xcode, by driving a Mac over SSH: new projects, tap-to-install builds on your phone, and App Store listings with a tapped submission.",
+  "version": "0.1.0",
+  "enabled": true,
+  "provides_capabilities": [],
+  "setup": [
+    {
+      "key": "ios.build_host",
+      "prompt": "The Mac that builds, as you would ssh to it (key auth, Xcode installed)",
+      "example": "you@100.64.0.7"
+    },
+    {
+      "key": "ios.fallback_host",
+      "required": false,
+      "prompt": "A second Mac to use when the first is unreachable",
+      "example": "macbook"
+    },
+    {
+      "key": "ios.team_id",
+      "prompt": "Your Apple developer Team ID (developer.apple.com > Membership)",
+      "example": "ABCDE12345"
+    },
+    {
+      "key": "ios.signing_identity",
+      "required": false,
+      "prompt": "Your distribution signing identity, for App Store builds",
+      "example": "Apple Distribution: Your Name"
+    },
+    {
+      "key": "ios.bundle_prefix",
+      "required": false,
+      "prompt": "Prefix for new apps' bundle ids",
+      "example": "com.yourname"
+    },
+    {
+      "key": "ios.ota_url",
+      "prompt": "The https address that serves your install pages (iOS requires HTTPS)",
+      "example": "https://yourmachine.your-tailnet.ts.net:8460"
+    },
+    {
+      "key": "ios.ota_dir",
+      "required": false,
+      "prompt": "Folder the install pages are written to",
+      "default": "~/ota"
+    },
+    {
+      "key": "ios.node_bin",
+      "required": false,
+      "prompt": "Where Node lives, if it is not on PATH"
+    }
+  ],
+  "steps": [
+    "Make the build Mac reachable over SSH with key auth, with release Xcode installed and signed in to your Apple developer account.",
+    "On the Mac, in a GUI Terminal once, create a build keychain holding your Apple signing identities and save its password to ~/.config/build-keychain-pw (README.md explains why).",
+    "Create an App Store Connect API key (Users and Access > Integrations), copy the .p8 to ~/private_keys/ on the Mac, and store its key_id, issuer_id and key_path with herald secret request appstore.key_id and friends.",
+    "Serve ios.ota_dir over HTTPS at ios.ota_url, for example with a static server and tailscale serve."
+  ]
+}
